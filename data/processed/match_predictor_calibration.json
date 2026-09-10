@@ -1,0 +1,6 @@
+{
+    "temperature": 1.0800000000000003,
+    "calibration_log_loss": 0.9949040019428019,
+    "holdout_raw_log_loss": 1.0103358243008922,
+    "holdout_calibrated_log_loss": 1.0095516347130775
+}

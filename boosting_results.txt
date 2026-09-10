@@ -1,0 +1,97 @@
+Loaded 19,763 matches
+
+Predicting 2024-08
+Training matches: 16259
+Matches predicted: 125
+
+Predicting 2024-09
+Training matches: 16384
+Matches predicted: 174
+
+Predicting 2024-10
+Training matches: 16558
+Matches predicted: 153
+
+Predicting 2024-11
+Training matches: 16711
+Matches predicted: 167
+
+Predicting 2024-12
+Training matches: 16878
+Matches predicted: 199
+
+Predicting 2025-01
+Training matches: 17077
+Matches predicted: 185
+
+Predicting 2025-02
+Training matches: 17262
+Matches predicted: 196
+
+Predicting 2025-03
+Training matches: 17458
+Matches predicted: 165
+
+Predicting 2025-04
+Training matches: 17623
+Matches predicted: 203
+
+Predicting 2025-05
+Training matches: 17826
+Matches predicted: 185
+
+BOOSTING VALIDATION
+------------------------
+Matches:     1752
+Accuracy:    0.527
+Log Loss:    0.9907
+Brier Score: 0.5904
+
+Predicting 2025-08
+Training matches: 18011
+Matches predicted: 126
+
+Predicting 2025-09
+Training matches: 18137
+Matches predicted: 153
+
+Predicting 2025-10
+Training matches: 18290
+Matches predicted: 165
+
+Predicting 2025-11
+Training matches: 18455
+Matches predicted: 188
+
+Predicting 2025-12
+Training matches: 18643
+Matches predicted: 170
+
+Predicting 2026-01
+Training matches: 18813
+Matches predicted: 223
+
+Predicting 2026-02
+Training matches: 19036
+Matches predicted: 193
+
+Predicting 2026-03
+Training matches: 19229
+Matches predicted: 166
+
+Predicting 2026-04
+Training matches: 19395
+Matches predicted: 181
+
+Predicting 2026-05
+Training matches: 19576
+Matches predicted: 187
+
+BOOSTING TEST
+------------------------
+Matches:     1752
+Accuracy:    0.515
+Log Loss:    1.0022
+Brier Score: 0.5979
+
+Saved -> /Users/angelpereira/Downloads/soccer_prediction_phase1/data/processed/boosting_predictions.csv
