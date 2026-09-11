@@ -1,16 +1,40 @@
+import html
+
 import pandas as pd
+import requests
 import streamlit as st
 
-from src.match_predictor import load_matches
-from src.match_stats_predictor import resolve_stat_columns
+from src.config import LEAGUES
+
+from src.match_predictor import (
+    load_matches,
+)
+
+from src.match_stats_predictor import (
+    resolve_stat_columns,
+)
+
 from src.daily_match_stats_simulator import (
     get_all_fixtures,
     simulate_fixture,
+    ESPN_LEAGUES,
+)
+
+from src.live_data_updater import (
+    refresh_current_season,
 )
 
 
 # ============================================================
-# PAGE SETTINGS
+# SETTINGS
+# ============================================================
+
+LIVE_REFRESH_SECONDS = 30
+REQUEST_TIMEOUT = 20
+
+
+# ============================================================
+# PAGE CONFIG
 # ============================================================
 
 st.set_page_config(
@@ -22,7 +46,7 @@ st.set_page_config(
 
 
 # ============================================================
-# CUSTOM CSS
+# STYLING
 # ============================================================
 
 st.markdown(
@@ -31,7 +55,7 @@ st.markdown(
 
     .block-container {
         max-width: 1200px;
-        padding-top: 2rem;
+        padding-top: 1.5rem;
         padding-bottom: 4rem;
     }
 
@@ -43,55 +67,76 @@ st.markdown(
 
     .subtitle {
         color: #777;
-        font-size: 1rem;
-        margin-top: 0.2rem;
-        margin-bottom: 2rem;
-    }
-
-    .match-card {
-        border: 1px solid rgba(128,128,128,0.25);
-        border-radius: 18px;
-        padding: 22px;
-        margin-bottom: 22px;
-    }
-
-    .league-name {
-        font-size: 0.85rem;
-        font-weight: 700;
-        opacity: 0.65;
-        text-transform: uppercase;
-        letter-spacing: 0.08rem;
-    }
-
-    .match-title {
-        font-size: 1.45rem;
-        font-weight: 800;
-        margin-top: 6px;
-        margin-bottom: 4px;
-    }
-
-    .prediction {
-        font-size: 1rem;
-        margin-bottom: 16px;
+        margin-top: 0.25rem;
+        margin-bottom: 1.5rem;
     }
 
     .score-box {
         text-align: center;
-        padding: 12px;
-        border-radius: 12px;
         background: rgba(128,128,128,0.08);
-        margin-top: 12px;
-        margin-bottom: 12px;
+        border-radius: 14px;
+        padding: 15px;
+        margin-top: 10px;
+        margin-bottom: 18px;
     }
 
     .score-number {
-        font-size: 2rem;
+        font-size: 1.8rem;
         font-weight: 800;
     }
 
     .small-muted {
-        font-size: 0.82rem;
         opacity: 0.65;
+        font-size: 0.82rem;
+    }
+
+    .live-game {
+        border: 1px solid rgba(128,128,128,0.25);
+        border-radius: 14px;
+        padding: 14px 16px;
+        margin-bottom: 10px;
+    }
+
+    .live-league {
+        opacity: 0.60;
+        text-transform: uppercase;
+        font-size: 0.75rem;
+        font-weight: 700;
+        letter-spacing: 0.05rem;
+    }
+
+    .live-match-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        margin-top: 5px;
+    }
+
+    .live-teams {
+        font-size: 1rem;
+        font-weight: 700;
+        min-width: 0;
+    }
+
+    .live-score {
+        font-size: 1.25rem;
+        font-weight: 800;
+        white-space: nowrap;
+    }
+
+    .live-status {
+        margin-top: 5px;
+        font-size: 0.80rem;
+        opacity: 0.75;
+    }
+
+    .update-box {
+        border-radius: 12px;
+        background: rgba(128,128,128,0.08);
+        padding: 12px 14px;
+        margin-top: 8px;
+        margin-bottom: 16px;
     }
 
     @media (max-width: 600px) {
@@ -105,12 +150,16 @@ st.markdown(
             font-size: 1.8rem;
         }
 
-        .match-title {
-            font-size: 1.2rem;
+        .live-match-row {
+            align-items: flex-start;
         }
 
-        .match-card {
-            padding: 16px;
+        .live-score {
+            font-size: 1.1rem;
+        }
+
+        .score-number {
+            font-size: 1.35rem;
         }
     }
 
@@ -121,16 +170,21 @@ st.markdown(
 
 
 # ============================================================
-# LOAD MODEL DATA
+# BASIC DATA CLEANUP
 # ============================================================
 
-@st.cache_data(show_spinner=False)
-def load_model_data():
+def clean_matches(
+    matches
+):
 
-    matches = load_matches()
+    matches = matches.copy()
 
-    matches["date"] = pd.to_datetime(
-        matches["date"],
+    matches[
+        "date"
+    ] = pd.to_datetime(
+        matches[
+            "date"
+        ],
         errors="coerce"
     )
 
@@ -144,43 +198,647 @@ def load_model_data():
                 "away_team",
             ]
         )
-        .sort_values("date")
-        .reset_index(drop=True)
+        .sort_values(
+            "date"
+        )
+        .reset_index(
+            drop=True
+        )
     )
 
-    stat_columns = resolve_stat_columns(
-        matches
-    )
-
-    return (
-        matches,
-        stat_columns,
-    )
+    return matches
 
 
 # ============================================================
-# FETCH FIXTURES
+# LOAD BASE DATABASE
+#
+# Cached briefly.
+# When Run Predictions is pressed we clear the cache first.
 # ============================================================
 
 @st.cache_data(
     ttl=300,
     show_spinner=False
 )
-def fetch_fixtures(
-    date_string
-):
+def load_base_matches():
 
-    prediction_date = pd.Timestamp(
-        date_string
-    )
+    matches = load_matches()
 
-    return get_all_fixtures(
-        prediction_date
+    return clean_matches(
+        matches
     )
 
 
 # ============================================================
-# RUN ALL PREDICTIONS
+# ESPN SCORE HELPERS
+# ============================================================
+
+def get_espn_score(
+    competitor
+):
+
+    score = competitor.get(
+        "score"
+    )
+
+    if isinstance(
+        score,
+        dict
+    ):
+
+        score = (
+            score.get(
+                "displayValue"
+            )
+            or
+            score.get(
+                "value"
+            )
+        )
+
+    if score is None:
+        return None
+
+    return str(
+        score
+    )
+
+
+# ============================================================
+# GET LIVE / FINAL / SCHEDULED SCORES
+# ============================================================
+
+@st.cache_data(
+    ttl=20,
+    show_spinner=False
+)
+def fetch_live_scores(
+    date_string
+):
+
+    date_value = (
+        pd.Timestamp(
+            date_string
+        )
+        .strftime(
+            "%Y%m%d"
+        )
+    )
+
+    games = []
+    errors = []
+
+    for (
+        league_code,
+        espn_code,
+    ) in ESPN_LEAGUES.items():
+
+        url = (
+            "https://site.api.espn.com/"
+            "apis/site/v2/sports/soccer/"
+            f"{espn_code}/scoreboard"
+        )
+
+        try:
+
+            response = requests.get(
+                url,
+                params={
+                    "dates":
+                        date_value,
+
+                    "limit":
+                        100,
+                },
+                timeout=
+                    REQUEST_TIMEOUT,
+            )
+
+            response.raise_for_status()
+
+            data = (
+                response.json()
+            )
+
+        except Exception as error:
+
+            errors.append(
+                (
+                    LEAGUES[
+                        league_code
+                    ],
+                    str(error),
+                )
+            )
+
+            continue
+
+        events = (
+            data.get(
+                "events"
+            )
+            or []
+        )
+
+        for event in events:
+
+            competitions = (
+                event.get(
+                    "competitions"
+                )
+                or []
+            )
+
+            if not competitions:
+                continue
+
+            competition = (
+                competitions[0]
+            )
+
+            competitors = (
+                competition.get(
+                    "competitors"
+                )
+                or []
+            )
+
+            home_team = None
+            away_team = None
+
+            home_score = None
+            away_score = None
+
+            for competitor in competitors:
+
+                team_data = (
+                    competitor.get(
+                        "team"
+                    )
+                    or {}
+                )
+
+                team_name = (
+                    team_data.get(
+                        "displayName"
+                    )
+                    or
+                    team_data.get(
+                        "shortDisplayName"
+                    )
+                    or
+                    team_data.get(
+                        "name"
+                    )
+                    or
+                    "Unknown"
+                )
+
+                side = (
+                    competitor.get(
+                        "homeAway"
+                    )
+                )
+
+                score = get_espn_score(
+                    competitor
+                )
+
+                if side == "home":
+
+                    home_team = (
+                        team_name
+                    )
+
+                    home_score = (
+                        score
+                    )
+
+                elif side == "away":
+
+                    away_team = (
+                        team_name
+                    )
+
+                    away_score = (
+                        score
+                    )
+
+            if (
+                not home_team
+                or not away_team
+            ):
+
+                continue
+
+            status_type = (
+                event.get(
+                    "status",
+                    {}
+                )
+                .get(
+                    "type",
+                    {}
+                )
+            )
+
+            state = (
+                status_type.get(
+                    "state"
+                )
+                or ""
+            ).lower()
+
+            completed = bool(
+                status_type.get(
+                    "completed",
+                    False
+                )
+            )
+
+            detail = (
+                status_type.get(
+                    "shortDetail"
+                )
+                or
+                status_type.get(
+                    "detail"
+                )
+                or
+                status_type.get(
+                    "description"
+                )
+                or
+                status_type.get(
+                    "name"
+                )
+                or
+                ""
+            )
+
+            if (
+                state == "in"
+            ):
+
+                status_group = "live"
+
+            elif (
+                state == "post"
+                or completed
+            ):
+
+                status_group = "final"
+
+            else:
+
+                status_group = "scheduled"
+
+            games.append({
+
+                "event_id":
+                    str(
+                        event.get(
+                            "id",
+                            ""
+                        )
+                    ),
+
+                "league_code":
+                    league_code,
+
+                "league":
+                    LEAGUES[
+                        league_code
+                    ],
+
+                "home_team":
+                    home_team,
+
+                "away_team":
+                    away_team,
+
+                "home_score":
+                    home_score,
+
+                "away_score":
+                    away_score,
+
+                "status":
+                    detail,
+
+                "status_group":
+                    status_group,
+
+                "kickoff":
+                    event.get(
+                        "date"
+                    ),
+            })
+
+    # Live games first, then scheduled,
+    # then completed.
+    priority = {
+        "live": 0,
+        "scheduled": 1,
+        "final": 2,
+    }
+
+    games.sort(
+        key=lambda game: (
+            priority.get(
+                game[
+                    "status_group"
+                ],
+                9
+            ),
+            game[
+                "league"
+            ],
+            str(
+                game.get(
+                    "kickoff",
+                    ""
+                )
+            ),
+        )
+    )
+
+    return (
+        games,
+        errors,
+    )
+
+
+# ============================================================
+# LIVE SCORE CARD
+# ============================================================
+
+def display_live_game(
+    game
+):
+
+    home = html.escape(
+        str(
+            game[
+                "home_team"
+            ]
+        )
+    )
+
+    away = html.escape(
+        str(
+            game[
+                "away_team"
+            ]
+        )
+    )
+
+    league = html.escape(
+        str(
+            game[
+                "league"
+            ]
+        )
+    )
+
+    status = html.escape(
+        str(
+            game.get(
+                "status",
+                ""
+            )
+        )
+    )
+
+    status_group = (
+        game[
+            "status_group"
+        ]
+    )
+
+    if status_group == "live":
+
+        status_text = (
+            f"🔴 LIVE · {status}"
+            if status
+            else
+            "🔴 LIVE"
+        )
+
+    elif status_group == "final":
+
+        status_text = (
+            "✅ Final"
+        )
+
+    else:
+
+        status_text = (
+            f"🕒 {status}"
+            if status
+            else
+            "🕒 Scheduled"
+        )
+
+    if (
+        status_group
+        == "scheduled"
+    ):
+
+        score_text = "vs"
+
+    else:
+
+        home_score = (
+            game[
+                "home_score"
+            ]
+            if game[
+                "home_score"
+            ]
+            is not None
+            else "-"
+        )
+
+        away_score = (
+            game[
+                "away_score"
+            ]
+            if game[
+                "away_score"
+            ]
+            is not None
+            else "-"
+        )
+
+        score_text = (
+            f"{home_score} - "
+            f"{away_score}"
+        )
+
+    st.markdown(
+        f"""
+        <div class="live-game">
+
+            <div class="live-league">
+                {league}
+            </div>
+
+            <div class="live-match-row">
+
+                <div class="live-teams">
+                    {home}<br>
+                    {away}
+                </div>
+
+                <div class="live-score">
+                    {score_text}
+                </div>
+
+            </div>
+
+            <div class="live-status">
+                {status_text}
+            </div>
+
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+# ============================================================
+# LIVE SCORE CENTER
+#
+# Only this section reruns every 30 seconds.
+# ============================================================
+
+@st.fragment(
+    run_every=
+        LIVE_REFRESH_SECONDS
+)
+def live_score_center(
+    selected_date,
+    selected_league
+):
+
+    header1, header2 = (
+        st.columns(
+            [
+                3,
+                1,
+            ]
+        )
+    )
+
+    with header1:
+
+        st.markdown(
+            "### 🔴 Live Score Center"
+        )
+
+        st.caption(
+            "Scores refresh automatically "
+            f"every {LIVE_REFRESH_SECONDS} seconds "
+            "while this page is open."
+        )
+
+    with header2:
+
+        refresh_now = (
+            st.button(
+                "↻ Refresh",
+                use_container_width=True,
+                key=(
+                    "live_refresh_"
+                    f"{selected_date}_"
+                    f"{selected_league}"
+                ),
+            )
+        )
+
+    if refresh_now:
+
+        fetch_live_scores.clear()
+
+    games, errors = (
+        fetch_live_scores(
+            str(
+                selected_date
+            )
+        )
+    )
+
+    if (
+        selected_league
+        != "All Leagues"
+    ):
+
+        games = [
+            game
+            for game in games
+            if (
+                game[
+                    "league"
+                ]
+                ==
+                selected_league
+            )
+        ]
+
+    if not games:
+
+        st.info(
+            "No games found for this "
+            "league/date."
+        )
+
+    else:
+
+        live_count = sum(
+            1
+            for game in games
+            if (
+                game[
+                    "status_group"
+                ]
+                == "live"
+            )
+        )
+
+        if live_count:
+
+            st.caption(
+                f"{live_count} match"
+                f"{'es' if live_count != 1 else ''} "
+                "currently live."
+            )
+
+        for game in games:
+
+            display_live_game(
+                game
+            )
+
+    if errors:
+
+        with st.expander(
+            "Live score connection warnings"
+        ):
+
+            for (
+                league,
+                error,
+            ) in errors:
+
+                st.write(
+                    f"**{league}:** "
+                    f"{error}"
+                )
+
+
+# ============================================================
+# RUN MATCH PREDICTIONS
 # ============================================================
 
 def run_predictions(
@@ -189,10 +847,8 @@ def run_predictions(
     prediction_date
 ):
 
-    fixtures = fetch_fixtures(
-        str(
-            prediction_date.date()
-        )
+    fixtures = get_all_fixtures(
+        prediction_date
     )
 
     predictions = []
@@ -206,13 +862,20 @@ def run_predictions(
             fixtures,
         )
 
-    progress = st.progress(0)
+    progress = st.progress(
+        0
+    )
 
     status_box = st.empty()
 
-    total = len(fixtures)
+    total = len(
+        fixtures
+    )
 
-    for index, fixture in enumerate(
+    for (
+        index,
+        fixture,
+    ) in enumerate(
         fixtures,
         start=1
     ):
@@ -226,11 +889,13 @@ def run_predictions(
 
         try:
 
-            prediction = simulate_fixture(
-                fixture,
-                matches,
-                stat_columns,
-                prediction_date
+            prediction = (
+                simulate_fixture(
+                    fixture,
+                    matches,
+                    stat_columns,
+                    prediction_date
+                )
             )
 
             if prediction is None:
@@ -247,25 +912,28 @@ def run_predictions(
 
         except Exception as error:
 
-            fixture_copy = dict(
-                fixture
+            failed_fixture = (
+                dict(
+                    fixture
+                )
             )
 
-            fixture_copy["error"] = str(
+            failed_fixture[
+                "error"
+            ] = str(
                 error
             )
 
             failures.append(
-                fixture_copy
+                failed_fixture
             )
 
         progress.progress(
             index / total
         )
 
-    status_box.empty()
-
     progress.empty()
+    status_box.empty()
 
     return (
         predictions,
@@ -275,211 +943,189 @@ def run_predictions(
 
 
 # ============================================================
-# PROBABILITY BAR
+# MATCH PREDICTION CARD
 # ============================================================
 
-def probability_bar(
-    label,
-    probability
-):
-
-    st.write(
-        f"**{label}** — "
-        f"{probability:.1%}"
-    )
-
-    st.progress(
-        min(
-            max(
-                float(probability),
-                0.0
-            ),
-            1.0
-        )
-    )
-
-
-# ============================================================
-# MATCH CARD
-# ============================================================
-
-def display_match_card(
+def display_prediction_card(
     match
 ):
 
-    home = match[
-        "home_team"
-    ]
-
-    away = match[
-        "away_team"
-    ]
-
-    st.markdown(
-        f"""
-        <div class="match-card">
-
-            <div class="league-name">
-                {match['league']}
-            </div>
-
-            <div class="match-title">
-                {home} vs {away}
-            </div>
-
-            <div class="prediction">
-                Prediction:
-                <strong>
-                    {match['predicted_result']}
-                </strong>
-            </div>
-
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # ========================================================
-    # RESULT PROBABILITIES
-    # ========================================================
-
-    st.markdown(
-        "#### Match Result"
-    )
-
-    probability_bar(
-        home,
+    home = (
         match[
-            "home_probability"
+            "home_team"
         ]
     )
 
-    probability_bar(
-        "Draw",
+    away = (
         match[
-            "draw_probability"
+            "away_team"
         ]
     )
 
-    probability_bar(
-        away,
-        match[
-            "away_probability"
-        ]
-    )
+    with st.container(
+        border=True
+    ):
 
-    # ========================================================
-    # SCORE
-    # ========================================================
+        st.caption(
+            match[
+                "league"
+            ]
+        )
 
-    st.markdown(
-        f"""
-        <div class="score-box">
-
-            <div class="small-muted">
-                MOST LIKELY SCORE
-            </div>
-
-            <div class="score-number">
-                {home}
-                {match['predicted_home_goals']}
-                -
-                {match['predicted_away_goals']}
-                {away}
-            </div>
-
-            <div class="small-muted">
-                Exact score probability:
-                {match['score_probability']:.1%}
-            </div>
-
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # ========================================================
-    # STATS
-    # ========================================================
-
-    col1, col2, col3 = st.columns(
-        3
-    )
-
-    with col1:
+        st.subheader(
+            f"{home} vs {away}"
+        )
 
         st.markdown(
-            "##### Expected Goals"
+            f"**Most likely outcome:** "
+            f"{match['predicted_result']}"
         )
 
-        st.metric(
-            home,
-            f"{match['home_xg']:.2f}"
-        )
-
-        st.metric(
-            away,
-            f"{match['away_xg']:.2f}"
-        )
-
-        st.caption(
-            f"Total: "
-            f"{match['total_xg']:.2f}"
-        )
-
-    with col2:
+        # ====================================================
+        # RESULT PROBABILITIES
+        # ====================================================
 
         st.markdown(
-            "##### Shots on Target"
+            "##### Match Result"
         )
 
-        st.metric(
-            home,
-            f"{match['home_sot']:.2f}"
+        result1, result2, result3 = (
+            st.columns(
+                3
+            )
         )
 
-        st.metric(
-            away,
-            f"{match['away_sot']:.2f}"
+        with result1:
+
+            st.metric(
+                home,
+                f"{match['home_probability']:.1%}"
+            )
+
+        with result2:
+
+            st.metric(
+                "Draw",
+                f"{match['draw_probability']:.1%}"
+            )
+
+        with result3:
+
+            st.metric(
+                away,
+                f"{match['away_probability']:.1%}"
+            )
+
+        # ====================================================
+        # EXACT SCORE
+        # ====================================================
+
+        safe_home = html.escape(
+            home
         )
 
-        st.caption(
-            f"Total: "
-            f"{match['total_sot']:.2f}"
+        safe_away = html.escape(
+            away
         )
-
-    with col3:
 
         st.markdown(
-            "##### Corners"
+            f"""
+            <div class="score-box">
+
+                <div class="small-muted">
+                    MOST LIKELY EXACT SCORE
+                </div>
+
+                <div class="score-number">
+                    {safe_home}
+                    {match['predicted_home_goals']}
+                    -
+                    {match['predicted_away_goals']}
+                    {safe_away}
+                </div>
+
+                <div class="small-muted">
+                    Probability of this exact score:
+                    {match['score_probability']:.1%}
+                </div>
+
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
 
-        st.metric(
-            home,
-            f"{match['home_corners']:.2f}"
+        # ====================================================
+        # STATS
+        # ====================================================
+
+        stat1, stat2, stat3 = (
+            st.columns(
+                3
+            )
         )
 
-        st.metric(
-            away,
-            f"{match['away_corners']:.2f}"
-        )
+        with stat1:
 
-        st.caption(
-            f"Total: "
-            f"{match['total_corners']:.2f}"
-        )
+            st.markdown(
+                "##### Expected Goals"
+            )
 
-    status = match.get(
-        "status"
-    )
+            st.metric(
+                home,
+                f"{match['home_xg']:.2f}"
+            )
 
-    if status:
+            st.metric(
+                away,
+                f"{match['away_xg']:.2f}"
+            )
 
-        st.caption(
-            f"Fixture status: {status}"
-        )
+            st.caption(
+                f"Total: "
+                f"{match['total_xg']:.2f}"
+            )
 
-    st.divider()
+        with stat2:
+
+            st.markdown(
+                "##### Shots on Target"
+            )
+
+            st.metric(
+                home,
+                f"{match['home_sot']:.2f}"
+            )
+
+            st.metric(
+                away,
+                f"{match['away_sot']:.2f}"
+            )
+
+            st.caption(
+                f"Total: "
+                f"{match['total_sot']:.2f}"
+            )
+
+        with stat3:
+
+            st.markdown(
+                "##### Corners"
+            )
+
+            st.metric(
+                home,
+                f"{match['home_corners']:.2f}"
+            )
+
+            st.metric(
+                away,
+                f"{match['away_corners']:.2f}"
+            )
+
+            st.caption(
+                f"Total: "
+                f"{match['total_corners']:.2f}"
+            )
 
 
 # ============================================================
@@ -573,6 +1219,46 @@ def create_summary_table(
 
 
 # ============================================================
+# SESSION STATE
+# ============================================================
+
+defaults = {
+
+    "predictions":
+        None,
+
+    "prediction_date":
+        None,
+
+    "failures":
+        [],
+
+    "update_report":
+        None,
+
+    "model_matches_count":
+        None,
+
+    "model_latest_date":
+        None,
+}
+
+for (
+    key,
+    value,
+) in defaults.items():
+
+    if (
+        key
+        not in st.session_state
+    ):
+
+        st.session_state[
+            key
+        ] = value
+
+
+# ============================================================
 # HEADER
 # ============================================================
 
@@ -583,7 +1269,8 @@ st.markdown(
     </div>
 
     <div class="subtitle">
-        Result probabilities, goals, shots on target and corners
+        Result probabilities, goals, shots on target,
+        corners and live scores
     </div>
     """,
     unsafe_allow_html=True,
@@ -591,124 +1278,214 @@ st.markdown(
 
 
 # ============================================================
-# LOAD DATA
+# DATE / LEAGUE CONTROLS
 # ============================================================
 
-try:
-
-    matches, stat_columns = (
-        load_model_data()
+control1, control2 = (
+    st.columns(
+        2
     )
-
-except Exception as error:
-
-    st.error(
-        "Could not load the prediction model."
-    )
-
-    st.exception(
-        error
-    )
-
-    st.stop()
-
-
-# ============================================================
-# CONTROLS
-# ============================================================
-
-control1, control2 = st.columns(
-    [
-        2,
-        1,
-    ]
 )
 
 with control1:
 
-    selected_date = st.date_input(
-        "Match date",
-        value=pd.Timestamp.today().date(),
+    selected_date = (
+        st.date_input(
+            "Match date",
+            value=
+                pd.Timestamp
+                .today()
+                .date(),
+        )
     )
 
 with control2:
 
-    st.write("")
+    league_options = [
+        "All Leagues",
+        *list(
+            LEAGUES.values()
+        ),
+    ]
 
-    st.write("")
-
-    run_button = st.button(
-        "⚽ Run Predictions",
-        type="primary",
-        use_container_width=True,
+    selected_league = (
+        st.selectbox(
+            "League",
+            league_options,
+        )
     )
 
 
 # ============================================================
-# LEAGUE FILTER
+# LIVE SCORES
 # ============================================================
 
-league_options = [
-    "All Leagues",
-    "Premier League",
-    "La Liga",
-    "Serie A",
-    "Bundesliga",
-    "Ligue 1",
-]
-
-selected_league = st.selectbox(
-    "League",
-    league_options,
+live_score_center(
+    selected_date,
+    selected_league
 )
 
 
 # ============================================================
-# SESSION STORAGE
+# DIVIDER
 # ============================================================
 
-if (
-    "predictions"
-    not in st.session_state
-):
-
-    st.session_state[
-        "predictions"
-    ] = None
-
-
-if (
-    "prediction_date"
-    not in st.session_state
-):
-
-    st.session_state[
-        "prediction_date"
-    ] = None
-
-
-if (
-    "failures"
-    not in st.session_state
-):
-
-    st.session_state[
-        "failures"
-    ] = []
+st.divider()
 
 
 # ============================================================
-# RUN MODEL
+# PREDICTION SECTION
+# ============================================================
+
+st.markdown(
+    "## 🔮 Pre-Match Predictions"
+)
+
+st.caption(
+    "Before every prediction run, the app checks "
+    "for newly completed Big Five matches and "
+    "incorporates them into the model data."
+)
+
+
+run_button = st.button(
+    "⚽ Update Data & Run Predictions",
+    type="primary",
+    use_container_width=True,
+)
+
+
+# ============================================================
+# UPDATE DATABASE + RUN MODEL
 # ============================================================
 
 if run_button:
 
-    prediction_date = pd.Timestamp(
-        selected_date
+    prediction_date = (
+        pd.Timestamp(
+            selected_date
+        ).normalize()
     )
 
+    # ========================================================
+    # FORCE FRESH BASE LOAD
+    # ========================================================
+
+    load_base_matches.clear()
+
     with st.spinner(
-        "Finding fixtures and running models..."
+        "Loading historical database..."
+    ):
+
+        base_matches = (
+            load_base_matches()
+        )
+
+    # ========================================================
+    # CHECK FOR NEW COMPLETED MATCHES
+    # ========================================================
+
+    with st.spinner(
+        "Checking all five leagues for "
+        "newly completed matches..."
+    ):
+
+        try:
+
+            (
+                updated_matches,
+                update_report,
+            ) = refresh_current_season(
+                base_matches,
+                save=False,
+                verbose=False
+            )
+
+            updated_matches = (
+                clean_matches(
+                    updated_matches
+                )
+            )
+
+        except Exception as error:
+
+            updated_matches = (
+                base_matches
+            )
+
+            update_report = {
+
+                "new_matches":
+                    0,
+
+                "refreshed_matches":
+                    0,
+
+                "errors": {
+                    "Updater":
+                        str(error)
+                },
+            }
+
+    # ========================================================
+    # STAT COLUMNS
+    # ========================================================
+
+    try:
+
+        stat_columns = (
+            resolve_stat_columns(
+                updated_matches
+            )
+        )
+
+    except Exception as error:
+
+        st.error(
+            "Could not find the shots-on-target "
+            "or corner columns."
+        )
+
+        st.exception(
+            error
+        )
+
+        st.stop()
+
+    # ========================================================
+    # STORE UPDATE INFORMATION
+    # ========================================================
+
+    st.session_state[
+        "update_report"
+    ] = update_report
+
+    st.session_state[
+        "model_matches_count"
+    ] = len(
+        updated_matches
+    )
+
+    latest_date = (
+        updated_matches[
+            "date"
+        ].max()
+    )
+
+    if pd.notna(
+        latest_date
+    ):
+
+        st.session_state[
+            "model_latest_date"
+        ] = latest_date.date()
+
+    # ========================================================
+    # RUN PREDICTIONS
+    # ========================================================
+
+    with st.spinner(
+        "Finding fixtures and running predictions..."
     ):
 
         (
@@ -716,7 +1493,7 @@ if run_button:
             failures,
             fixtures,
         ) = run_predictions(
-            matches,
+            updated_matches,
             stat_columns,
             prediction_date
         )
@@ -733,11 +1510,15 @@ if run_button:
         "failures"
     ] = failures
 
+    # ========================================================
+    # RESULT MESSAGE
+    # ========================================================
+
     if not fixtures:
 
         st.warning(
             "No Big Five fixtures were "
-            "found for that date."
+            "found for this date."
         )
 
     elif not predictions:
@@ -750,12 +1531,98 @@ if run_button:
     else:
 
         st.success(
-            f"{len(predictions)} matches predicted."
+            f"{len(predictions)} "
+            "matches predicted successfully."
         )
 
 
 # ============================================================
-# DISPLAY RESULTS
+# DATABASE UPDATE STATUS
+# ============================================================
+
+update_report = (
+    st.session_state[
+        "update_report"
+    ]
+)
+
+if update_report is not None:
+
+    new_matches = (
+        update_report.get(
+            "new_matches",
+            0
+        )
+    )
+
+    refreshed = (
+        update_report.get(
+            "refreshed_matches",
+            0
+        )
+    )
+
+    match_count = (
+        st.session_state[
+            "model_matches_count"
+        ]
+    )
+
+    latest_date = (
+        st.session_state[
+            "model_latest_date"
+        ]
+    )
+
+    st.markdown(
+        f"""
+        <div class="update-box">
+
+        <strong>📚 Model data updated</strong><br>
+
+        New completed matches found:
+        <strong>{new_matches}</strong><br>
+
+        Existing current-season matches refreshed:
+        <strong>{refreshed}</strong><br>
+
+        Matches available to model:
+        <strong>{match_count:,}</strong><br>
+
+        Latest match in model:
+        <strong>{latest_date}</strong>
+
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    errors = (
+        update_report.get(
+            "errors",
+            {}
+        )
+    )
+
+    if errors:
+
+        with st.expander(
+            "⚠️ Data update warnings"
+        ):
+
+            for (
+                league,
+                error,
+            ) in errors.items():
+
+                st.write(
+                    f"**{league}:** "
+                    f"{error}"
+                )
+
+
+# ============================================================
+# PREDICTIONS
 # ============================================================
 
 predictions = (
@@ -767,7 +1634,7 @@ predictions = (
 if predictions:
 
     # ========================================================
-    # FILTER
+    # LEAGUE FILTER
     # ========================================================
 
     if (
@@ -793,10 +1660,6 @@ if predictions:
             predictions
         )
 
-    # ========================================================
-    # DATE
-    # ========================================================
-
     prediction_date = (
         st.session_state[
             "prediction_date"
@@ -810,21 +1673,23 @@ if predictions:
 
     st.caption(
         f"{len(visible_predictions)} "
-        f"matches shown"
+        "matches shown"
     )
 
-    # ========================================================
-    # SUMMARY
-    # ========================================================
-
     if visible_predictions:
+
+        # ====================================================
+        # SUMMARY
+        # ====================================================
 
         st.markdown(
             "### Daily Summary"
         )
 
-        summary = create_summary_table(
-            visible_predictions
+        summary = (
+            create_summary_table(
+                visible_predictions
+            )
         )
 
         st.dataframe(
@@ -834,20 +1699,24 @@ if predictions:
         )
 
         # ====================================================
-        # CSV DOWNLOAD
+        # DOWNLOAD
         # ====================================================
 
-        full_csv = pd.DataFrame(
-            visible_predictions
-        ).to_csv(
-            index=False
-        ).encode(
-            "utf-8"
+        csv_data = (
+            pd.DataFrame(
+                visible_predictions
+            )
+            .to_csv(
+                index=False
+            )
+            .encode(
+                "utf-8"
+            )
         )
 
         st.download_button(
-            "Download predictions CSV",
-            data=full_csv,
+            "Download Predictions CSV",
+            data=csv_data,
             file_name=(
                 "predictions_"
                 f"{prediction_date.date()}"
@@ -858,7 +1727,7 @@ if predictions:
         )
 
         # ====================================================
-        # MATCH CARDS
+        # DETAILED MATCH CARDS
         # ====================================================
 
         st.markdown(
@@ -869,20 +1738,20 @@ if predictions:
             visible_predictions
         ):
 
-            display_match_card(
+            display_prediction_card(
                 match
             )
 
     else:
 
         st.info(
-            "No matches from the selected "
-            "league on this date."
+            "There are no matches from "
+            "the selected league on this date."
         )
 
 
 # ============================================================
-# FAILED FIXTURES
+# FAILURES
 # ============================================================
 
 failures = (
@@ -894,8 +1763,8 @@ failures = (
 if failures:
 
     with st.expander(
-        f"⚠️ {len(failures)} fixtures "
-        f"could not be modeled"
+        f"⚠️ {len(failures)} fixture(s) "
+        "could not be modeled"
     ):
 
         for fixture in failures:
@@ -919,13 +1788,40 @@ if failures:
 
 
 # ============================================================
+# EXPLANATION
+# ============================================================
+
+with st.expander(
+    "ℹ️ How this works"
+):
+
+    st.write(
+        """
+        The predictions are pre-match estimates.
+
+        Before running predictions, the app checks
+        Football-Data for newly completed matches.
+        Any new results, shots on target and corners
+        found there are added to the model data used
+        for that prediction run.
+
+        The Live Score Center is separate. It checks
+        current match scores automatically but does
+        not change a pre-match prediction while a game
+        is being played.
+        """
+    )
+
+
+# ============================================================
 # FOOTER
 # ============================================================
 
 st.divider()
 
 st.caption(
-    "Predictions are statistical model estimates. "
-    "Shots on target and corner models are experimental "
-    "and should be validated with historical backtesting."
+    "Predictions are statistical estimates. "
+    "Shots-on-target and corner models remain "
+    "experimental and should be evaluated through "
+    "historical and forward testing."
 )
